@@ -1,6 +1,8 @@
 package dev.raymondweng;
 
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.channel.Channel;
 import net.dv8tion.jda.api.events.GenericEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
@@ -9,10 +11,14 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.sql.*;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MessageController implements EventListener {
-    List<String> ADMINS = List.of("1066517249906704524");
+    List<String> ADMINS = List.of(
+            "1066517249906704524" // Raymond Weng
+    );
 
     @Override
     public void onEvent(@NotNull GenericEvent genericEvent) {
@@ -71,7 +77,7 @@ public class MessageController implements EventListener {
                                     .sendMessage("我們已經在記錄這個頻道的內容了！")
                                     .queue();
                         } else {
-                            if (slashCommandInteractionEvent.getUser().getId().equals("1066517249906704524")) {
+                            if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
                                 try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
                                     try (PreparedStatement ps = connection.prepareStatement("INSERT INTO monitored_channels (channel_id) VALUES (?)")) {
                                         ps.setString(1, slashCommandInteractionEvent.getChannelId());
@@ -146,7 +152,33 @@ public class MessageController implements EventListener {
                             }
                         }
                         if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
-                            stop(channelID);
+                            File file = new File("./db/" + channelID + ".db");
+                            if (file.exists()) {
+                                file.delete();
+                            }
+                            try {
+                                Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db");
+                                PreparedStatement ps = connection.prepareStatement("DELETE FROM monitored_channels WHERE channel_id = ?");
+                                ps.setString(1, channelID);
+                                ps.executeUpdate();
+                                ps.close();
+                                connection.close();
+                            } catch (SQLException e) {
+                                throw new RuntimeException(e);
+                            }
+                            Main.jda
+                                    .getGuildById("1484354171204407418")
+                                    .getTextChannelById("1484379156878721124")
+                                    .sendMessage("停止追蹤：" +
+                                            Main.jda.getTextChannelById(channelID).getGuild().getName() +
+                                            " - " +
+                                            Main.jda.getTextChannelById(channelID).getName() +
+                                            " ("
+                                            + channelID +
+                                            ")"
+                                    )
+                                    .queue();
+                            updateMonitoringCnt();
                             slashCommandInteractionEvent
                                     .getInteraction()
                                     .getHook()
@@ -161,8 +193,53 @@ public class MessageController implements EventListener {
                         }
                         break;
                     case "list":
-                        if (slashCommandInteractionEvent.getUser().getId().equals("1066517249906704524")) {
-                            //TODO list watching
+                        if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                            Map<String, List<String>> map;
+                            try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+                                try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM monitored_channels")) {
+                                    try (ResultSet rs = ps.executeQuery()) {
+                                        map = new HashMap<>();
+                                        while (rs.next()) {
+                                            String channelId = rs.getString("channel_id");
+                                            Channel channel = Main.jda.getTextChannelById(channelId);
+                                            if (channel == null) {
+                                                try (Statement statement = connection.createStatement()) {
+                                                    statement.executeUpdate("DELETE FROM monitored_channels WHERE channel_id = '" + channelId + "'");
+                                                }
+                                                continue;
+                                            }
+                                            Guild guild = Main.jda.getTextChannelById(channelId).getGuild();
+                                            if (map.containsKey(guild.getName() + "(" + guild.getId() + ")")) {
+                                                map.get(guild.getName() + "(" + guild.getId() + ")").add(channel.getName() + "(" + channel.getId() + ")");
+                                                continue;
+                                            }
+                                            map.put(
+                                                    guild.getName() + "(" + guild.getId() + ")",
+                                                    List.of(channel.getName() + "(" + channel.getId() + ")")
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            StringBuilder msg = new StringBuilder("目前監控中的頻道有：\n");
+                            for(String key : map.keySet()) {
+                                msg.append(key).append(":\n");
+                                boolean first = true;
+                                for (String channelName : map.get(key)) {
+                                    if(first){
+                                        first = false;
+                                    }else{
+                                        msg.append(", ");
+                                    }
+                                    msg.append(channelName);
+                                }
+                                msg.append("\n\n");
+                            }
+                            slashCommandInteractionEvent
+                                    .getInteraction()
+                                    .getHook()
+                                    .sendMessage(msg.toString())
+                                    .queue();
                         } else {
                             slashCommandInteractionEvent
                                     .getInteraction()
@@ -269,41 +346,11 @@ public class MessageController implements EventListener {
         return false;
     }
 
-    private void stop(String channelID) throws SQLException {
-        File file = new File("./db/" + channelID + ".db");
-        if (file.exists()) {
-            file.delete();
-        }
-        try {
-            Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db");
-            PreparedStatement ps = connection.prepareStatement("DELETE FROM monitored_channels WHERE channel_id = ?");
-            ps.setString(1, channelID);
-            ps.executeUpdate();
-            ps.close();
-            connection.close();
-        } catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-        Main.jda
-                .getGuildById("1484354171204407418")
-                .getTextChannelById("1484379156878721124")
-                .sendMessage("停止追蹤：" +
-                        Main.jda.getTextChannelById(channelID).getGuild().getName() +
-                        " - " +
-                        Main.jda.getTextChannelById(channelID).getName() +
-                        " ("
-                        + channelID +
-                        ")"
-                )
-                .queue();
-        updateMonitoringCnt();
-    }
-
     private void updateMonitoringCnt() throws SQLException {
         int cnt = 0;
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
-            try(PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) AS cnt FROM monitored_channels")) {
-                try(ResultSet rs = ps.executeQuery()) {
+            try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) AS cnt FROM monitored_channels")) {
+                try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         cnt = rs.getInt("cnt");
                     }
