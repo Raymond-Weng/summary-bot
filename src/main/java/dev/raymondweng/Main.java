@@ -29,13 +29,14 @@ public class Main {
         jda.upsertCommand(
                 Commands
                         .slash("monitor", "[暫時僅開發者]開始監控這個頻道（並自動讀取部分歷史訊息）")
+                        .addOption(OptionType.STRING, "channel_id", "要監控的頻道ID（預設為當前頻道）", false)
                         .setContexts(InteractionContextType.GUILD)
                         .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
         ).queue();
         jda.upsertCommand(
                 Commands
                         .slash("stop", "[開發者]停止監控")
-                        .addOption(OptionType.STRING, "channel_id", "要停止監控的頻道ID", false)
+                        .addOption(OptionType.STRING, "channel_id", "要停止監控的頻道ID（預設為當前頻道）", false)
                         .setContexts(InteractionContextType.GUILD)
                         .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.ADMINISTRATOR))
         ).queue();

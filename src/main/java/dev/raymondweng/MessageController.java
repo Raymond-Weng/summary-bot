@@ -38,6 +38,7 @@ public class MessageController implements EventListener {
                             messageReceivedEvent.getMessage().getReferencedMessage() != null ? messageReceivedEvent.getMessage().getReferencedMessage().getAuthor().getGlobalName() : "",
                             messageReceivedEvent.getMessage().getReferencedMessage() != null ? messageReceivedEvent.getMessage().getReferencedMessage().getContentDisplay() : ""
                     );
+                    Thread.startVirtualThread(new Summarizer(messageReceivedEvent.getChannel().getId()));
                 }
             }
             if (genericEvent instanceof SlashCommandInteractionEvent slashCommandInteractionEvent) {
@@ -46,45 +47,32 @@ public class MessageController implements EventListener {
                     case "summary":
                         if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
                             //TODO return result
-                            slashCommandInteractionEvent
-                                    .getJDA()
-                                    .getGuildById("1484354171204407418")
-                                    .getTextChannelById("1485810509788876971")
-                                    .sendMessage("呼叫總結：" +
-                                            slashCommandInteractionEvent.getGuild().getName() +
-                                            " - " +
-                                            slashCommandInteractionEvent.getChannel().getName() +
-                                            " ("
-                                            + slashCommandInteractionEvent.getChannelId() +
-                                            ")"
-                                    )
-                                    .queue();
+                            Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                         } else {
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage("這個頻道沒有被我們紀錄。" +
-                                            "為了節約效能，我們並不會紀錄每個頻道，如果需要紀錄，請使用`/monitor`指令" +
-                                            "（目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)）。")
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, "這個頻道沒有被我們紀錄。" +
+                                    "為了節約效能，我們並不會紀錄每個頻道，如果需要紀錄，請使用`/monitor`指令" +
+                                    "（目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)）。");
                         }
                         break;
                     case "monitor":
+                        //TODO deal with option
                         if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage("我們已經在記錄這個頻道的內容了！")
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, "我們已經在記錄這個頻道的內容了！");
                         } else {
                             if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
                                 try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+                                    try (Statement statement = connection.createStatement()) {
+                                        statement.execute("PRAGMA busy_timeout=5000");
+                                    }
                                     try (PreparedStatement ps = connection.prepareStatement("INSERT INTO monitored_channels (channel_id) VALUES (?)")) {
                                         ps.setString(1, slashCommandInteractionEvent.getChannelId());
                                         ps.executeUpdate();
                                     }
                                 }
                                 try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + slashCommandInteractionEvent.getChannelId() + ".db")) {
+                                    try (Statement statement = connection.createStatement()) {
+                                        statement.execute("PRAGMA busy_timeout=5000");
+                                    }
                                     connection
                                             .createStatement()
                                             .executeUpdate("CREATE TABLE IF NOT EXISTS messages (" +
@@ -99,32 +87,12 @@ public class MessageController implements EventListener {
                                                     "processed INTEGER NOT NULL DEFAULT 0" +
                                                     ")");
                                 }
-                                slashCommandInteractionEvent
-                                        .getJDA()
-                                        .getGuildById("1484354171204407418")
-                                        .getTextChannelById("1484379156878721124")
-                                        .sendMessage("追蹤頻道：" +
-                                                slashCommandInteractionEvent.getGuild().getName() +
-                                                " - " +
-                                                slashCommandInteractionEvent.getChannel().getName() +
-                                                " ("
-                                                + slashCommandInteractionEvent.getChannelId() +
-                                                ")"
-                                        )
-                                        .queue();
+                                Logger.log(Logger.MONITOR_CHANNEL, slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                                 updateMonitoringCnt();
-                                slashCommandInteractionEvent
-                                        .getInteraction()
-                                        .getHook()
-                                        .sendMessage("已經成功紀錄這個頻道，請使用`/summary`來取得統整。我們會閱讀一些先前的訊息，這可能需要一點時間。")
-                                        .queue();
-                                //TODO message history reading
+                                replySlashCommand(slashCommandInteractionEvent, "已經成功紀錄這個頻道，請使用`/summary`來取得統整。我們會閱讀一些先前的訊息，這可能需要一點時間。");
+                                Thread.startVirtualThread(new HistoryReader(slashCommandInteractionEvent.getChannelId()));
                             } else {
-                                slashCommandInteractionEvent
-                                        .getInteraction()
-                                        .getHook()
-                                        .sendMessage("這個指令目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)。")
-                                        .queue();
+                                replySlashCommand(slashCommandInteractionEvent, "這個指令目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)。");
                             }
                         }
                         break;
@@ -133,20 +101,12 @@ public class MessageController implements EventListener {
                         if (slashCommandInteractionEvent.getOption("channel_id") != null) {
                             channelID = slashCommandInteractionEvent.getOption("channel_id").getAsString();
                             if (slashCommandInteractionEvent.getJDA().getTextChannelById(channelID) == null) {
-                                slashCommandInteractionEvent
-                                        .getInteraction()
-                                        .getHook()
-                                        .sendMessage("無效的頻道ID。")
-                                        .queue();
+                                replySlashCommand(slashCommandInteractionEvent, "無效的頻道ID。");
                                 return;
                             }
                             if (!slashCommandInteractionEvent.getGuild().getId().equals(slashCommandInteractionEvent.getJDA().getTextChannelById(channelID).getGuild().getId())) {
                                 if (!ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
-                                    slashCommandInteractionEvent
-                                            .getInteraction()
-                                            .getHook()
-                                            .sendMessage("你沒有停止這個頻道的權限。")
-                                            .queue();
+                                    replySlashCommand(slashCommandInteractionEvent, "你只能停止同一個伺服器裡的頻道，除非你是開發者。");
                                     return;
                                 }
                             }
@@ -156,46 +116,29 @@ public class MessageController implements EventListener {
                             if (file.exists()) {
                                 file.delete();
                             }
-                            try {
-                                Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db");
-                                PreparedStatement ps = connection.prepareStatement("DELETE FROM monitored_channels WHERE channel_id = ?");
-                                ps.setString(1, channelID);
-                                ps.executeUpdate();
-                                ps.close();
-                                connection.close();
-                            } catch (SQLException e) {
-                                throw new RuntimeException(e);
+                            try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+                                try (Statement statement = connection.createStatement()) {
+                                    statement.execute("PRAGMA busy_timeout=5000");
+                                }
+                                try (PreparedStatement ps = connection.prepareStatement("DELETE FROM monitored_channels WHERE channel_id = ?")) {
+                                    ps.setString(1, channelID);
+                                    ps.executeUpdate();
+                                }
                             }
-                            Main.jda
-                                    .getGuildById("1484354171204407418")
-                                    .getTextChannelById("1484379156878721124")
-                                    .sendMessage("停止追蹤：" +
-                                            Main.jda.getTextChannelById(channelID).getGuild().getName() +
-                                            " - " +
-                                            Main.jda.getTextChannelById(channelID).getName() +
-                                            " ("
-                                            + channelID +
-                                            ")"
-                                    )
-                                    .queue();
+                            Logger.log(Logger.MONITOR_CHANNEL, "停止追蹤：" + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + " (" + channelID + ")");
                             updateMonitoringCnt();
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage("已經停止關注這裡並刪除先前紀錄。")
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, "已經停止關注這裡並刪除先前紀錄。");
                         } else {
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage("這裡還沒開始過，可能沒辦法停止")
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, "這裡還沒開始過，可能沒辦法停止");
                         }
                         break;
                     case "list":
                         if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
                             Map<String, List<String>> map;
                             try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+                                try (Statement statement = connection.createStatement()) {
+                                    statement.execute("PRAGMA busy_timeout=5000");
+                                }
                                 try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM monitored_channels")) {
                                     try (ResultSet rs = ps.executeQuery()) {
                                         map = new HashMap<>();
@@ -222,24 +165,20 @@ public class MessageController implements EventListener {
                                 }
                             }
                             StringBuilder msg = new StringBuilder("目前監控中的頻道有：\n");
-                            for(String key : map.keySet()) {
+                            for (String key : map.keySet()) {
                                 msg.append(key).append(":\n");
                                 boolean first = true;
                                 for (String channelName : map.get(key)) {
-                                    if(first){
+                                    if (first) {
                                         first = false;
-                                    }else{
+                                    } else {
                                         msg.append(", ");
                                     }
                                     msg.append(channelName);
                                 }
                                 msg.append("\n\n");
                             }
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage(msg.toString())
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, msg.toString());
                         } else {
                             slashCommandInteractionEvent
                                     .getInteraction()
@@ -252,47 +191,18 @@ public class MessageController implements EventListener {
             }
         } catch (SQLException e) {
             if (genericEvent instanceof MessageReceivedEvent messageReceivedEvent) {
-                messageReceivedEvent
-                        .getJDA()
-                        .getGuildById("1484354171204407418")
-                        .getTextChannelById("1485816952550195240")
-                        .sendMessage("SQLException：" +
-                                messageReceivedEvent.getGuild().getName() +
-                                " - " +
-                                messageReceivedEvent.getChannel().getName() +
-                                " (" +
-                                messageReceivedEvent.getChannel().getId() +
-                                ")" +
-                                e.getMessage()
-                        )
-                        .queue();
+                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException：" + messageReceivedEvent.getGuild().getName() + " - " + messageReceivedEvent.getChannel().getName() + " (" + messageReceivedEvent.getChannel().getId() + ")" + e.getMessage());
             }
             if (genericEvent instanceof SlashCommandInteractionEvent slashCommandInteractionEvent) {
-                slashCommandInteractionEvent
-                        .getInteraction()
-                        .getHook()
-                        .sendMessage("發生了資料庫錯誤，請稍後再試一次。如果這個問題持續存在，請聯絡[Raymond Weng](https://raymondweng.dev/)。")
-                        .queue();
-                slashCommandInteractionEvent
-                        .getJDA()
-                        .getGuildById("1484354171204407418")
-                        .getTextChannelById("1485816952550195240")
-                        .sendMessage("SQLException：" +
-                                slashCommandInteractionEvent.getGuild().getName() +
-                                " - " +
-                                slashCommandInteractionEvent.getChannel().getName() +
-                                " (" +
-                                slashCommandInteractionEvent.getChannelId() +
-                                ")" +
-                                e.getMessage()
-                        )
-                        .queue();
+                replySlashCommand(slashCommandInteractionEvent, "發生了資料庫錯誤，請稍後再試一次。如果這個問題持續存在，請聯絡[Raymond Weng](https://raymondweng.dev/)。");
+                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannel().getId() + ")" + e.getMessage());
+
             }
         }
     }
 
-    private synchronized void summarize() {
-        //TODO summarize
+    private void replySlashCommand(SlashCommandInteractionEvent slashCommandInteractionEvent, String message) {
+        slashCommandInteractionEvent.getInteraction().getHook().sendMessage(message).queue();
     }
 
     private void message(String channelId,
@@ -303,52 +213,61 @@ public class MessageController implements EventListener {
                          boolean doReply,
                          String replyTo,
                          String replyContext) throws SQLException {
-        Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelId + ".db");
-        PreparedStatement ps = connection.prepareStatement("INSERT INTO messages (message_id, author_id, content, has_attachment, attachment_desc, do_reply, reply_to_author, reply_to_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-        ps.setString(1, messageId);
-        ps.setString(2, author);
-        ps.setString(3, messageContext);
-        if (!attachmentDesc.isEmpty()) {
-            ps.setInt(4, 1);
-            ps.setString(5, attachmentDesc.toString());
-        } else {
-            ps.setInt(4, 0);
-            ps.setString(5, null);
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelId + ".db")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA busy_timeout=5000");
+            }
+            try (PreparedStatement ps = connection.prepareStatement("INSERT INTO messages (message_id, author_id, content, has_attachment, attachment_desc, do_reply, reply_to_author, reply_to_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                ps.setString(1, messageId);
+                ps.setString(2, author);
+                ps.setString(3, messageContext);
+                if (!attachmentDesc.isEmpty()) {
+                    ps.setInt(4, 1);
+                    ps.setString(5, attachmentDesc.toString());
+                } else {
+                    ps.setInt(4, 0);
+                    ps.setString(5, null);
+                }
+                if (doReply) {
+                    ps.setInt(6, 1);
+                    ps.setString(7, replyTo);
+                    ps.setString(8, replyContext);
+                } else {
+                    ps.setInt(6, 0);
+                    ps.setString(7, null);
+                    ps.setString(8, null);
+                }
+                ps.executeUpdate();
+            }
         }
-        if (doReply) {
-            ps.setInt(6, 1);
-            ps.setString(7, replyTo);
-            ps.setString(8, replyContext);
-        } else {
-            ps.setInt(6, 0);
-            ps.setString(7, null);
-            ps.setString(8, null);
-        }
-        ps.executeUpdate();
-        ps.close();
-        connection.close();
     }
 
     private boolean isChannelMonitored(String channelId) throws SQLException {
-        Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db");
-        PreparedStatement ps = connection.prepareStatement("SELECT * FROM monitored_channels WHERE channel_id = ?");
-        ps.setString(1, channelId);
-        ResultSet rs = ps.executeQuery();
-        if (rs.next()) {
-            rs.close();
-            ps.close();
-            connection.close();
-            return true;
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA busy_timeout=5000");
+            }
+            try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM monitored_channels WHERE channel_id = ?")) {
+                ps.setString(1, channelId);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        rs.close();
+                        ps.close();
+                        connection.close();
+                        return true;
+                    }
+                }
+            }
         }
-        rs.close();
-        ps.close();
-        connection.close();
         return false;
     }
 
     private void updateMonitoringCnt() throws SQLException {
         int cnt = 0;
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("PRAGMA busy_timeout=5000");
+            }
             try (PreparedStatement ps = connection.prepareStatement("SELECT COUNT(*) AS cnt FROM monitored_channels")) {
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
@@ -357,6 +276,8 @@ public class MessageController implements EventListener {
                 }
             }
         }
-        Main.jda.getVoiceChannelById("1485501726915301487").getManager().setName("監控頻道數：" + cnt).queue();
+        if (!Main.dotenv.get("DISCORD_CHANNEL_COUNT_VOICE_CHANNEL_ID").equals("-1")) {
+            Main.jda.getVoiceChannelById(Main.dotenv.get("DISCORD_CHANNEL_COUNT_VOICE_CHANNEL_ID")).getManager().setName("監控頻道數：" + cnt).queue();
+        }
     }
 }
