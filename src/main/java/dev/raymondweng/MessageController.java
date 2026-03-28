@@ -22,30 +22,47 @@ public class MessageController implements EventListener {
 
     @Override
     public void onEvent(@NotNull GenericEvent genericEvent) {
+        String channelID;
         try {
             if (genericEvent instanceof MessageReceivedEvent messageReceivedEvent) {
+                channelID = messageReceivedEvent.getMessage().getChannelId();
                 if (isChannelMonitored(messageReceivedEvent.getChannel().getId())) {
                     StringBuilder stringBuilder = new StringBuilder();
                     for (Message.Attachment attachment : messageReceivedEvent.getMessage().getAttachments()) {
                         stringBuilder.append(attachment.getFileName()).append(" ");
                     }
-                    message(messageReceivedEvent.getChannel().getId(),
+                    message(channelID,
                             messageReceivedEvent.getMessageId(),
                             messageReceivedEvent.getAuthor().getGlobalName(),
                             messageReceivedEvent.getMessage().getContentDisplay(),
+                            !messageReceivedEvent.getMessage().getAttachments().isEmpty(),
                             stringBuilder.toString(),
                             messageReceivedEvent.getMessage().getReferencedMessage() != null,
                             messageReceivedEvent.getMessage().getReferencedMessage() != null ? messageReceivedEvent.getMessage().getReferencedMessage().getAuthor().getGlobalName() : "",
                             messageReceivedEvent.getMessage().getReferencedMessage() != null ? messageReceivedEvent.getMessage().getReferencedMessage().getContentDisplay() : ""
                     );
-                    Thread.startVirtualThread(new Summarizer(messageReceivedEvent.getChannel().getId()));
+                    try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelID + ".db")) {
+                        try (Statement statement = connection.createStatement()) {
+                            statement.execute("PRAGMA busy_timeout=5000");
+                        }
+                        try (Statement statement = connection.createStatement()) {
+                            try (ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) AS cnt FROM messages WHERE processed = 0")) {
+                                if (resultSet.next()) {
+                                    if (resultSet.getInt("cnt") >= 10) {
+                                        Thread.startVirtualThread(new Summarizer(channelID));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if (genericEvent instanceof SlashCommandInteractionEvent slashCommandInteractionEvent) {
+                channelID = slashCommandInteractionEvent.getChannelId();
                 slashCommandInteractionEvent.deferReply().setEphemeral(true).queue();
                 switch (slashCommandInteractionEvent.getName()) {
                     case "summary":
-                        if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
+                        if (isChannelMonitored(channelID)) {
                             //TODO return result
                             Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                         } else {
@@ -55,8 +72,20 @@ public class MessageController implements EventListener {
                         }
                         break;
                     case "monitor":
-                        //TODO deal with option
-                        if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
+                        if (slashCommandInteractionEvent.getOption("channel_id") != null) {
+                            channelID = slashCommandInteractionEvent.getOption("channel_id").getAsString();
+                            if (slashCommandInteractionEvent.getJDA().getTextChannelById(channelID) == null) {
+                                replySlashCommand(slashCommandInteractionEvent, "無效的頻道ID。");
+                                return;
+                            }
+                            if (!slashCommandInteractionEvent.getGuild().getId().equals(slashCommandInteractionEvent.getJDA().getTextChannelById(channelID).getGuild().getId())) {
+                                if (!ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                                    replySlashCommand(slashCommandInteractionEvent, "你只能監控同一個伺服器裡的頻道，除非你是開發者。");
+                                    return;
+                                }
+                            }
+                        }
+                        if (isChannelMonitored(channelID)) {
                             replySlashCommand(slashCommandInteractionEvent, "我們已經在記錄這個頻道的內容了！");
                         } else {
                             if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
@@ -73,19 +102,25 @@ public class MessageController implements EventListener {
                                     try (Statement statement = connection.createStatement()) {
                                         statement.execute("PRAGMA busy_timeout=5000");
                                     }
-                                    connection
-                                            .createStatement()
-                                            .executeUpdate("CREATE TABLE IF NOT EXISTS messages (" +
-                                                    "message_id TEXT NOT NULL," +
-                                                    "author_id TEXT NOT NULL," +
-                                                    "content TEXT NOT NULL," +
-                                                    "has_attachment INTEGER NOT NULL DEFAULT 0," +
-                                                    "attachment_desc TEXT," +
-                                                    "do_reply INTEGER NOT NULL DEFAULT 0," +
-                                                    "reply_to_author TEXT," +
-                                                    "reply_to_content TEXT," +
-                                                    "processed INTEGER NOT NULL DEFAULT 0" +
-                                                    ")");
+                                    try (Statement statement = connection.createStatement()) {
+                                        statement.executeUpdate("CREATE TABLE IF NOT EXISTS messages (" +
+                                                "message_id TEXT NOT NULL," +
+                                                "content TEXT NOT NULL," +
+                                                "processed INTEGER NOT NULL DEFAULT 0" +
+                                                ")");
+                                    }
+                                    try (Statement statement = connection.createStatement()) {
+                                        statement.executeUpdate("CREATE TABLE IF NOT EXISTS status (" +
+                                                "key STRING," +
+                                                "value STRING" +
+                                                ")");
+                                    }
+                                    try(Statement statement = connection.createStatement()){
+                                        statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summary', '這個頻道未曾被總結過')");
+                                    }
+                                    try(Statement statement = connection.createStatement()){
+                                        statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summarize_message_id', '')");
+                                    }
                                 }
                                 Logger.log(Logger.MONITOR_CHANNEL, slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                                 updateMonitoringCnt();
@@ -97,7 +132,6 @@ public class MessageController implements EventListener {
                         }
                         break;
                     case "stop":
-                        String channelID = slashCommandInteractionEvent.getChannelId();
                         if (slashCommandInteractionEvent.getOption("channel_id") != null) {
                             channelID = slashCommandInteractionEvent.getOption("channel_id").getAsString();
                             if (slashCommandInteractionEvent.getJDA().getTextChannelById(channelID) == null) {
@@ -143,15 +177,14 @@ public class MessageController implements EventListener {
                                     try (ResultSet rs = ps.executeQuery()) {
                                         map = new HashMap<>();
                                         while (rs.next()) {
-                                            String channelId = rs.getString("channel_id");
-                                            Channel channel = Main.jda.getTextChannelById(channelId);
+                                            Channel channel = Main.jda.getTextChannelById(channelID);
                                             if (channel == null) {
                                                 try (Statement statement = connection.createStatement()) {
-                                                    statement.executeUpdate("DELETE FROM monitored_channels WHERE channel_id = '" + channelId + "'");
+                                                    statement.executeUpdate("DELETE FROM monitored_channels WHERE channel_id = '" + channelID + "'");
                                                 }
                                                 continue;
                                             }
-                                            Guild guild = Main.jda.getTextChannelById(channelId).getGuild();
+                                            Guild guild = Main.jda.getTextChannelById(channelID).getGuild();
                                             if (map.containsKey(guild.getName() + "(" + guild.getId() + ")")) {
                                                 map.get(guild.getName() + "(" + guild.getId() + ")").add(channel.getName() + "(" + channel.getId() + ")");
                                                 continue;
@@ -191,11 +224,11 @@ public class MessageController implements EventListener {
             }
         } catch (SQLException e) {
             if (genericEvent instanceof MessageReceivedEvent messageReceivedEvent) {
-                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException：" + messageReceivedEvent.getGuild().getName() + " - " + messageReceivedEvent.getChannel().getName() + " (" + messageReceivedEvent.getChannel().getId() + ")" + e.getMessage());
+                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException in message controller while receiving message：" + messageReceivedEvent.getGuild().getName() + " - " + messageReceivedEvent.getChannel().getName() + " (" + messageReceivedEvent.getChannel().getId() + ")" + e.getMessage());
             }
             if (genericEvent instanceof SlashCommandInteractionEvent slashCommandInteractionEvent) {
                 replySlashCommand(slashCommandInteractionEvent, "發生了資料庫錯誤，請稍後再試一次。如果這個問題持續存在，請聯絡[Raymond Weng](https://raymondweng.dev/)。");
-                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannel().getId() + ")" + e.getMessage());
+                Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException in message controller while process slash command：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannel().getId() + ")" + e.getMessage());
 
             }
         }
@@ -205,50 +238,35 @@ public class MessageController implements EventListener {
         slashCommandInteractionEvent.getInteraction().getHook().sendMessage(message).queue();
     }
 
-    private void message(String channelId,
+    private void message(String channelID,
                          String messageId,
                          String author,
                          String messageContext,
+                         boolean doAttachment,
                          String attachmentDesc,
                          boolean doReply,
                          String replyTo,
                          String replyContext) throws SQLException {
-        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelId + ".db")) {
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelID + ".db")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA busy_timeout=5000");
             }
-            try (PreparedStatement ps = connection.prepareStatement("INSERT INTO messages (message_id, author_id, content, has_attachment, attachment_desc, do_reply, reply_to_author, reply_to_content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
-                ps.setString(1, messageId);
-                ps.setString(2, author);
-                ps.setString(3, messageContext);
-                if (!attachmentDesc.isEmpty()) {
-                    ps.setInt(4, 1);
-                    ps.setString(5, attachmentDesc.toString());
-                } else {
-                    ps.setInt(4, 0);
-                    ps.setString(5, null);
-                }
-                if (doReply) {
-                    ps.setInt(6, 1);
-                    ps.setString(7, replyTo);
-                    ps.setString(8, replyContext);
-                } else {
-                    ps.setInt(6, 0);
-                    ps.setString(7, null);
-                    ps.setString(8, null);
-                }
-                ps.executeUpdate();
+            // message saved: <author>message[attachmentdesc(if contain)](reply to: <replyTo> replyContext)
+            try (PreparedStatement preparedStatement = connection.prepareStatement("INSERT INTO messages (message_id, content) VALUES (?, ?)")) {
+                preparedStatement.setString(1, messageId);
+                preparedStatement.setString(2, "<" + author + ">" + messageContext + (doAttachment ? ("[" + attachmentDesc + "]") : "") + (doReply ? ("(回覆了<" + replyTo + ">" + replyContext + ")") : ""));
+                preparedStatement.executeUpdate();
             }
         }
     }
 
-    private boolean isChannelMonitored(String channelId) throws SQLException {
+    private boolean isChannelMonitored(String channelID) throws SQLException {
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA busy_timeout=5000");
             }
             try (PreparedStatement ps = connection.prepareStatement("SELECT * FROM monitored_channels WHERE channel_id = ?")) {
-                ps.setString(1, channelId);
+                ps.setString(1, channelID);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
                         rs.close();
