@@ -74,7 +74,23 @@ public class MessageController implements EventListener {
                                         lastSummary = resultSet.getString("value");
                                     }
                                 }
-                                replySlashCommand(slashCommandInteractionEvent, "頻道摘要：\n" + lastSummary);
+                                String messageLink = "https://discord.com/channels/" + slashCommandInteractionEvent.getGuild().getId() + "/" + channelID + "/";
+                                try (Statement statement = connection.createStatement()) {
+                                    try (ResultSet resultSet = statement.executeQuery("SELECT value FROM status WHERE key = 'last_summarize_message_id'")) {
+                                        resultSet.next();
+                                        String lastSummarizeMessageId = resultSet.getString("value");
+                                        if (!lastSummarizeMessageId.isEmpty()) {
+                                            messageLink += lastSummarizeMessageId;
+                                        } else {
+                                            messageLink = "";
+                                        }
+                                    }
+                                }
+                                if (messageLink.isEmpty()) {
+                                    replySlashCommand(slashCommandInteractionEvent, "目前沒有摘要，傳送訊息後會我們會開始閱讀，並在訊息量變多時產生摘要，請稍後再試一次！");
+                                    return;
+                                }
+                                replySlashCommand(slashCommandInteractionEvent, "摘要（截至[這則訊息](" + messageLink + ")）\n" + lastSummary + "\n\n-# 以上摘要由Mistral AI產生，AI資訊可能不完全正確，請以實際訊息內容為準，摘要僅作參考。");
                             }
                             Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                         } else {
@@ -134,7 +150,7 @@ public class MessageController implements EventListener {
                                         statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summarize_message_id', '')");
                                     }
                                 }
-                                Logger.log(Logger.MONITOR_CHANNEL, slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
+                                Logger.log(Logger.MONITOR_CHANNEL, "開始追蹤：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                                 updateMonitoringCnt();
                                 replySlashCommand(slashCommandInteractionEvent, "已經成功紀錄這個頻道，請使用`/summary`來取得統整。我們會閱讀一些先前的訊息，這可能需要一點時間。");
                                 Thread.startVirtualThread(new HistoryReader(slashCommandInteractionEvent.getChannelId()));
