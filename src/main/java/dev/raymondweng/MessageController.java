@@ -3,6 +3,7 @@ package dev.raymondweng;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.Channel;
+import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.GenericEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
@@ -63,7 +64,19 @@ public class MessageController implements EventListener {
                 switch (slashCommandInteractionEvent.getName()) {
                     case "summary":
                         if (isChannelMonitored(channelID)) {
-                            //TODO return result
+                            try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelID + ".db")) {
+                                try (Statement statement = connection.createStatement()) {
+                                    statement.execute("PRAGMA busy_timeout=5000");
+                                }
+                                String lastSummary;
+                                try (Statement statement = connection.createStatement()) {
+                                    try (ResultSet resultSet = statement.executeQuery("SELECT value FROM status WHERE key = 'last_summary'")) {
+                                        resultSet.next();
+                                        lastSummary = resultSet.getString("value");
+                                    }
+                                }
+                                replySlashCommand(slashCommandInteractionEvent, "頻道摘要：\n" + lastSummary);
+                            }
                             Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
                         } else {
                             replySlashCommand(slashCommandInteractionEvent, "這個頻道沒有被我們紀錄。" +
@@ -94,11 +107,11 @@ public class MessageController implements EventListener {
                                         statement.execute("PRAGMA busy_timeout=5000");
                                     }
                                     try (PreparedStatement ps = connection.prepareStatement("INSERT INTO monitored_channels (channel_id) VALUES (?)")) {
-                                        ps.setString(1, slashCommandInteractionEvent.getChannelId());
+                                        ps.setString(1, channelID);
                                         ps.executeUpdate();
                                     }
                                 }
-                                try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + slashCommandInteractionEvent.getChannelId() + ".db")) {
+                                try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelID + ".db")) {
                                     try (Statement statement = connection.createStatement()) {
                                         statement.execute("PRAGMA busy_timeout=5000");
                                     }
@@ -115,10 +128,10 @@ public class MessageController implements EventListener {
                                                 "value STRING" +
                                                 ")");
                                     }
-                                    try(Statement statement = connection.createStatement()){
+                                    try (Statement statement = connection.createStatement()) {
                                         statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summary', '這個頻道未曾被總結過')");
                                     }
-                                    try(Statement statement = connection.createStatement()){
+                                    try (Statement statement = connection.createStatement()) {
                                         statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summarize_message_id', '')");
                                     }
                                 }
@@ -146,10 +159,6 @@ public class MessageController implements EventListener {
                             }
                         }
                         if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
-                            File file = new File("./db/" + channelID + ".db");
-                            if (file.exists()) {
-                                file.delete();
-                            }
                             try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
                                 try (Statement statement = connection.createStatement()) {
                                     statement.execute("PRAGMA busy_timeout=5000");
@@ -161,7 +170,8 @@ public class MessageController implements EventListener {
                             }
                             Logger.log(Logger.MONITOR_CHANNEL, "停止追蹤：" + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + " (" + channelID + ")");
                             updateMonitoringCnt();
-                            replySlashCommand(slashCommandInteractionEvent, "已經停止關注這裡並刪除先前紀錄。");
+                            replySlashCommand(slashCommandInteractionEvent, "已經停止關注這裡並正在刪除紀錄。");
+                            Thread.startVirtualThread(new RemoveHistory(channelID));
                         } else {
                             replySlashCommand(slashCommandInteractionEvent, "這裡還沒開始過，可能沒辦法停止");
                         }
@@ -177,14 +187,19 @@ public class MessageController implements EventListener {
                                     try (ResultSet rs = ps.executeQuery()) {
                                         map = new HashMap<>();
                                         while (rs.next()) {
-                                            Channel channel = Main.jda.getTextChannelById(channelID);
+                                            TextChannel channel = Main.jda.getTextChannelById(rs.getString("channel_id"));
                                             if (channel == null) {
-                                                try (Statement statement = connection.createStatement()) {
-                                                    statement.executeUpdate("DELETE FROM monitored_channels WHERE channel_id = '" + channelID + "'");
+                                                try (PreparedStatement preparedStatement = connection.prepareStatement("DELETE FROM monitored_channels WHERE channel_id = ?")) {
+                                                    preparedStatement.setString(1, rs.getString("channel_id"));
+                                                    preparedStatement.executeUpdate();
+                                                }
+                                                File file = new File("./db/" + rs.getString("channel_id") + ".db");
+                                                if (file.exists()) {
+                                                    file.delete();
                                                 }
                                                 continue;
                                             }
-                                            Guild guild = Main.jda.getTextChannelById(channelID).getGuild();
+                                            Guild guild = channel.getGuild();
                                             if (map.containsKey(guild.getName() + "(" + guild.getId() + ")")) {
                                                 map.get(guild.getName() + "(" + guild.getId() + ")").add(channel.getName() + "(" + channel.getId() + ")");
                                                 continue;
@@ -269,9 +284,6 @@ public class MessageController implements EventListener {
                 ps.setString(1, channelID);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (rs.next()) {
-                        rs.close();
-                        ps.close();
-                        connection.close();
                         return true;
                     }
                 }

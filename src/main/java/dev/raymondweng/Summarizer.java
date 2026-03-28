@@ -51,13 +51,21 @@ public class Summarizer implements Runnable {
                     message = stringBuilder.toString();
                 }
             }
-            String prompt = "你現在面對許多Discord訊息，你的職責是要統整訊息內容，並且僅回傳統整的內容，不需要最任何其他的回應，且以繁體中文取代簡體中文。" +
-                    "統整時避免紀錄敏感訊息及閒聊，統整出主題及討論的結果。當主題偏離且統整內容過長，刪除舊主題的統整內容，但至少保留最近的主題。" +
-                    "這裡有上次統整的內容：\n" +
-                    lastSummary +
-                    "\n以下是新訊息，格式為：<傳送者>訊息內容[附加檔案名稱](回覆內容)，且中括號及小括號在內容不存在時會被省略：\n" +
-                    message;
-            System.out.println(prompt);
+            String prompt = "你是一個專業的會議記錄員，負責整理 Discord 群組的對話重點。\n\n" +
+                    "## 規則\n" +
+                    "- 輸出必須是你依照訊息重新撰寫的摘要，嚴格禁止完全照抄原始訊息\n" +
+                    "- 若新訊息不包含任何有意義的資訊（例如只有數字、符號、閒聊），則直接輸出先前摘要，不做任何修改，也不添加任何內容\n" +
+                    "- 嚴禁虛構、推測或補充任何訊息中未提及的資訊" +
+                    "- 忽略閒聊、表情符號回應、敏感內容、敏感訊息（例如密碼）\n" +
+                    "- 聚焦在重要的人、事、時、地、物及決議\n" +
+                    "- 以條列式呈現，每點不超過40字，總字數控制在200字內\n" +
+                    "- 完全使用繁體中文摘要（除了英文專有名詞）\n" +
+                    "- 只輸出摘要內容，不要有任何前言或說明\n\n" +
+                    "## 先前摘要\n" +
+                    lastSummary + "\n\n" +
+                    "## 新訊息（格式：<傳送者>內容[附檔](回覆)）\n" +
+                    message + "\n\n" +
+                    "## 輸出：整合後的最新摘要";
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(URI.create(Main.dotenv.get("OLLAMA_API_URL")))
                     .header("Content-Type", "application/json")
@@ -80,9 +88,21 @@ public class Summarizer implements Runnable {
                     preparedStatement.setString(1, lastSummarizeMessage);
                     preparedStatement.executeUpdate();
                 }
-                System.out.println(summary);
+                Logger.log(Logger.SUMMARY_CHANNEL, "Summarized: " + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + "(" + channelID + ")");
             } else {
                 Logger.log(Logger.EXCEPTION_CHANNEL, "Summarizer API error:" + channelID + ": " + httpResponse.statusCode() + " " + httpResponse.body());
+            }
+            try(Statement statement = connection.createStatement()){
+                try(ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) AS cnt FROM messages WHERE processed = 0")) {
+                    resultSet.next();
+                    if(resultSet.getInt("cnt") > 0) {
+                        Thread.startVirtualThread(new Summarizer(channelID));
+                        return;
+                    }
+                }
+            }
+            try(Statement statement = connection.createStatement()){
+                statement.execute("DELETE FROM messages WHERE processed = 1");
             }
         }catch (SQLException e) {
             Logger.log(Logger.EXCEPTION_CHANNEL, "Summarizer connection failed:" + channelID + ": " + e.getMessage());
