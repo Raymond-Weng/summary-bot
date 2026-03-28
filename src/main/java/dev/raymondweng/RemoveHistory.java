@@ -3,7 +3,7 @@ package dev.raymondweng;
 import java.io.File;
 import java.util.concurrent.locks.ReentrantLock;
 
-public class RemoveHistory implements Runnable{
+public class RemoveHistory implements Runnable {
     public final String channelID;
 
     public RemoveHistory(String channelID) {

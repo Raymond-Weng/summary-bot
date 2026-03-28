@@ -26,23 +26,23 @@ public class Summarizer implements Runnable {
         // avoid threads use old summary to summarize new things
         // one channel -> one thread
         ReentrantLock reentrantLock = channelLocks.computeIfAbsent(channelID, k -> new ReentrantLock());
-        if(!reentrantLock.tryLock()) return;
+        if (!reentrantLock.tryLock()) return;
 
         try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/" + channelID + ".db")) {
             try (Statement statement = connection.createStatement()) {
                 statement.execute("PRAGMA busy_timeout=5000");
             }
             String lastSummary;
-            try(Statement statement = connection.createStatement()) {
-                try(ResultSet resultSet = statement.executeQuery("SELECT value FROM status WHERE key = 'last_summary'")) {
+            try (Statement statement = connection.createStatement()) {
+                try (ResultSet resultSet = statement.executeQuery("SELECT value FROM status WHERE key = 'last_summary'")) {
                     resultSet.next();
                     lastSummary = resultSet.getString("value");
                 }
             }
             String message;
             String lastSummarizeMessage = "";
-            try(Statement statement = connection.createStatement()) {
-                try(ResultSet resultSet = statement.executeQuery(("UPDATE messages set processed = 1 where message_id IN (SELECT message_id FROM messages WHERE processed = 0 ORDER BY message_id LIMIT 10) returning *"))) {
+            try (Statement statement = connection.createStatement()) {
+                try (ResultSet resultSet = statement.executeQuery(("UPDATE messages set processed = 1 where message_id IN (SELECT message_id FROM messages WHERE processed = 0 ORDER BY message_id LIMIT 10) returning *"))) {
                     StringBuilder stringBuilder = new StringBuilder();
                     while (resultSet.next()) {
                         stringBuilder.append(resultSet.getString("content")).append("\n");
@@ -80,11 +80,11 @@ public class Summarizer implements Runnable {
             HttpResponse<String> httpResponse = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
             if (httpResponse.statusCode() == 200) {
                 String summary = new ObjectMapper().readTree(httpResponse.body()).get("response").asText();
-                try(PreparedStatement preparedStatement = connection.prepareStatement("UPDATE status SET value = ? WHERE key = 'last_summary'")) {
+                try (PreparedStatement preparedStatement = connection.prepareStatement("UPDATE status SET value = ? WHERE key = 'last_summary'")) {
                     preparedStatement.setString(1, summary);
                     preparedStatement.executeUpdate();
                 }
-                try(PreparedStatement preparedStatement = connection.prepareStatement("UPDATE status SET value = ? WHERE key = 'last_summarize_message_id'")) {
+                try (PreparedStatement preparedStatement = connection.prepareStatement("UPDATE status SET value = ? WHERE key = 'last_summarize_message_id'")) {
                     preparedStatement.setString(1, lastSummarizeMessage);
                     preparedStatement.executeUpdate();
                 }
@@ -92,19 +92,19 @@ public class Summarizer implements Runnable {
             } else {
                 Logger.log(Logger.EXCEPTION_CHANNEL, "Summarizer API error:" + channelID + ": " + httpResponse.statusCode() + " " + httpResponse.body());
             }
-            try(Statement statement = connection.createStatement()){
-                try(ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) AS cnt FROM messages WHERE processed = 0")) {
+            try (Statement statement = connection.createStatement()) {
+                try (ResultSet resultSet = statement.executeQuery("SELECT COUNT(*) AS cnt FROM messages WHERE processed = 0")) {
                     resultSet.next();
-                    if(resultSet.getInt("cnt") > 0) {
+                    if (resultSet.getInt("cnt") > 0) {
                         Thread.startVirtualThread(new Summarizer(channelID));
                         return;
                     }
                 }
             }
-            try(Statement statement = connection.createStatement()){
+            try (Statement statement = connection.createStatement()) {
                 statement.execute("DELETE FROM messages WHERE processed = 1");
             }
-        }catch (SQLException e) {
+        } catch (SQLException e) {
             Logger.log(Logger.EXCEPTION_CHANNEL, "Summarizer connection failed:" + channelID + ": " + e.getMessage());
         } catch (IOException | InterruptedException e) {
             Logger.log(Logger.EXCEPTION_CHANNEL, "Summarizer API request failed:" + channelID + ": " + e.getMessage());

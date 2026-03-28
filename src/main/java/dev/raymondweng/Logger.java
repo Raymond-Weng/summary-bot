@@ -20,10 +20,8 @@ public class Logger {
                 channelID = Main.dotenv.get("DISCORD_EXCEPTION_CHANNEL_ID");
                 break;
         }
-        assert channelID != null;
         if (!channelID.equals("-1")) {
             TextChannel c = Main.jda.getTextChannelById(channelID);
-            assert c != null;
             c.sendMessage(Message).queue();
         }
     }

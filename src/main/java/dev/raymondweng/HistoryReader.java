@@ -1,8 +1,9 @@
 package dev.raymondweng;
 
-public class HistoryReader implements Runnable{
+public class HistoryReader implements Runnable {
     public final String channelID;
-    public HistoryReader(String channelID){
+
+    public HistoryReader(String channelID) {
         this.channelID = channelID;
     }
 
