@@ -13,13 +13,14 @@ import net.dv8tion.jda.api.requests.GatewayIntent;
 
 public class Main {
     public static JDA jda;
-    public static Dotenv dotenv = Dotenv.configure().directory("./env/.env").load();
+    public static final Dotenv dotenv = Dotenv.configure().directory("./env/.env").load();
+    public static final MessageController messageController = new MessageController();
 
     public static void main(String[] args) throws InterruptedException {
         // Java Discord API
         jda = JDABuilder
                 .createDefault(dotenv.get("DISCORD_BOT_TOKEN"))
-                .addEventListeners(new MessageController())
+                .addEventListeners(messageController)
                 .enableIntents(GatewayIntent.MESSAGE_CONTENT)
                 .build();
         jda.awaitReady();

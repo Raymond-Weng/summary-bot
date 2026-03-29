@@ -74,7 +74,7 @@ public class MessageController implements EventListener {
                                         lastSummary = resultSet.getString("value");
                                     }
                                 }
-                                String messageLink = "https://discord.com/channels/" + slashCommandInteractionEvent.getGuild().getId() + "/" + channelID + "/";
+                                String messageLink = "https://discord.com/channels/" + Main.jda.getTextChannelById(channelID).getGuild().getId() + "/" + channelID + "/";
                                 try (Statement statement = connection.createStatement()) {
                                     try (ResultSet resultSet = statement.executeQuery("SELECT value FROM status WHERE key = 'last_summarize_message_id'")) {
                                         resultSet.next();
@@ -92,7 +92,7 @@ public class MessageController implements EventListener {
                                 }
                                 replySlashCommand(slashCommandInteractionEvent, "摘要（截至[這則訊息](" + messageLink + ")）\n" + lastSummary + "\n\n-# 以上摘要由Mistral AI產生，AI資訊可能不完全正確，請以實際訊息內容為準，摘要僅作參考。");
                             }
-                            Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
+                            Logger.log(Logger.SUMMARY_CHANNEL, "總結請求：" + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + " (" + channelID + ")");
                         } else {
                             replySlashCommand(slashCommandInteractionEvent, "這個頻道沒有被我們紀錄。" +
                                     "為了節約效能，我們並不會紀錄每個頻道，如果需要紀錄，請使用`/monitor`指令" +
@@ -150,10 +150,10 @@ public class MessageController implements EventListener {
                                         statement.executeUpdate("INSERT INTO status (key, value) VALUES ('last_summarize_message_id', '')");
                                     }
                                 }
-                                Logger.log(Logger.MONITOR_CHANNEL, "開始追蹤：" + slashCommandInteractionEvent.getGuild().getName() + " - " + slashCommandInteractionEvent.getChannel().getName() + " (" + slashCommandInteractionEvent.getChannelId() + ")");
+                                Logger.log(Logger.MONITOR_CHANNEL, "開始追蹤：" + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + " (" + channelID + ")");
                                 updateMonitoringCnt();
                                 replySlashCommand(slashCommandInteractionEvent, "已經成功紀錄這個頻道，請使用`/summary`來取得統整。我們會閱讀一些先前的訊息，這可能需要一點時間。");
-                                Thread.startVirtualThread(new HistoryReader(slashCommandInteractionEvent.getChannelId()));
+                                Thread.startVirtualThread(new HistoryReader(channelID));
                             } else {
                                 replySlashCommand(slashCommandInteractionEvent, "這個指令目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)。");
                             }
@@ -173,7 +173,7 @@ public class MessageController implements EventListener {
                                 }
                             }
                         }
-                        if (isChannelMonitored(slashCommandInteractionEvent.getChannelId())) {
+                        if (isChannelMonitored(channelID)) {
                             try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
                                 try (Statement statement = connection.createStatement()) {
                                     statement.execute("PRAGMA busy_timeout=5000");
@@ -243,11 +243,7 @@ public class MessageController implements EventListener {
                             }
                             replySlashCommand(slashCommandInteractionEvent, msg.toString());
                         } else {
-                            slashCommandInteractionEvent
-                                    .getInteraction()
-                                    .getHook()
-                                    .sendMessage("這個指令目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)。")
-                                    .queue();
+                            replySlashCommand(slashCommandInteractionEvent, "這個指令目前僅開發者可用，如有需要請聯絡[Raymond Weng](https://raymondweng.dev/)。");
                         }
                         break;
                 }
@@ -268,7 +264,7 @@ public class MessageController implements EventListener {
         slashCommandInteractionEvent.getInteraction().getHook().sendMessage(message).queue();
     }
 
-    private void message(String channelID,
+    public void message(String channelID,
                          String messageId,
                          String author,
                          String messageContext,
