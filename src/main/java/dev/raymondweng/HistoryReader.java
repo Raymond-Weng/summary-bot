@@ -17,6 +17,7 @@ public class HistoryReader implements Runnable {
     public void run() {
         ReentrantLock reentrantLock = Summarizer.channelLocks.computeIfAbsent(channelID, k -> new ReentrantLock());
         reentrantLock.lock();
+        int cnt = 0;
         try {
             List<Message> messages = Main.jda
                     .getTextChannelById(channelID)
@@ -39,12 +40,15 @@ public class HistoryReader implements Runnable {
                         message.getReferencedMessage() != null ? message.getReferencedMessage().getAuthor().getGlobalName() : "",
                         message.getReferencedMessage() != null ? message.getReferencedMessage().getContentDisplay() : ""
                 );
+                cnt++;
             }
         } catch (SQLException e) {
             Logger.log(Logger.EXCEPTION_CHANNEL, "SQLException in history reader while reading message：" + Main.jda.getTextChannelById(channelID).getGuild().getName() + " - " + Main.jda.getTextChannelById(channelID).getName() + " (" + channelID + ")" + e.getMessage());
         } finally {
             reentrantLock.unlock();
         }
-        Thread.startVirtualThread(new Summarizer(channelID));
+        if(cnt >= 10){
+            Thread.startVirtualThread(new Summarizer(channelID));
+        }
     }
 }
