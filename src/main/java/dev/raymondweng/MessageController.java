@@ -11,14 +11,13 @@ import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.sql.*;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 public class MessageController implements EventListener {
-    List<String> ADMINS = List.of(
-            "1066517249906704524" // Raymond Weng
-    );
+    public static final String ADMIN = Main.dotenv.get("DISCORD_ADMIN_USER_ID");
 
     @Override
     public void onEvent(@NotNull GenericEvent genericEvent) {
@@ -107,7 +106,7 @@ public class MessageController implements EventListener {
                                 return;
                             }
                             if (!slashCommandInteractionEvent.getGuild().getId().equals(slashCommandInteractionEvent.getJDA().getTextChannelById(channelID).getGuild().getId())) {
-                                if (!ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                                if (!slashCommandInteractionEvent.getUser().getId().equals(ADMIN)) {
                                     replySlashCommand(slashCommandInteractionEvent, "你只能監控同一個伺服器裡的頻道，除非你是開發者。");
                                     return;
                                 }
@@ -116,7 +115,7 @@ public class MessageController implements EventListener {
                         if (isChannelMonitored(channelID)) {
                             replySlashCommand(slashCommandInteractionEvent, "我們已經在記錄這個頻道的內容了！");
                         } else {
-                            if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                            if (slashCommandInteractionEvent.getUser().getId().equals(ADMIN)) {
                                 try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
                                     try (Statement statement = connection.createStatement()) {
                                         statement.execute("PRAGMA busy_timeout=5000");
@@ -167,7 +166,7 @@ public class MessageController implements EventListener {
                                 return;
                             }
                             if (!slashCommandInteractionEvent.getGuild().getId().equals(slashCommandInteractionEvent.getJDA().getTextChannelById(channelID).getGuild().getId())) {
-                                if (!ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                                if (!slashCommandInteractionEvent.getUser().getId().equals(ADMIN)) {
                                     replySlashCommand(slashCommandInteractionEvent, "你只能停止同一個伺服器裡的頻道，除非你是開發者。");
                                     return;
                                 }
@@ -192,7 +191,7 @@ public class MessageController implements EventListener {
                         }
                         break;
                     case "list":
-                        if (ADMINS.contains(slashCommandInteractionEvent.getUser().getId())) {
+                        if (slashCommandInteractionEvent.getUser().getId().equals(ADMIN)) {
                             Map<String, List<String>> map;
                             try (Connection connection = DriverManager.getConnection("jdbc:sqlite:./db/monitored_channels.db")) {
                                 try (Statement statement = connection.createStatement()) {
@@ -221,7 +220,7 @@ public class MessageController implements EventListener {
                                             }
                                             map.put(
                                                     guild.getName() + "(" + guild.getId() + ")",
-                                                    List.of(channel.getName() + "(" + channel.getId() + ")")
+                                                    new ArrayList<>(List.of(channel.getName() + "(" + channel.getId() + ")"))
                                             );
                                         }
                                     }
